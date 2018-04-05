@@ -4,6 +4,7 @@
 #include "AirBlueprintLib.h"
 #include "GameFramework/WorldSettings.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/SkinnedMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/RotatingMovementComponent.h"
 #include <exception>
@@ -17,6 +18,7 @@
 #include "Kismet/KismetStringLibrary.h"
 #include "MessageDialog.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/SkeletalMesh.h"
 #include "Slate/SceneViewport.h"
 #include "Engine/Engine.h"
 
@@ -26,7 +28,6 @@ Naming conventions in this file:
 Methods -> CamelCase
 parameters -> camel_case
 */
-
 
 bool UAirBlueprintLib::log_messages_hidden = false;
 uint32_t UAirBlueprintLib::FlushOnDrawCount = 0;
@@ -148,6 +149,7 @@ void UAirBlueprintLib::LogMessage(const FString &prefix, const FString &suffix, 
     if (log_messages_hidden)
         return;
 
+
     static TMap<FString, int> loggingKeys;
     static int counter = 1;
 
@@ -159,13 +161,27 @@ void UAirBlueprintLib::LogMessage(const FString &prefix, const FString &suffix, 
 
     FColor color;
     switch (level) {
-    case LogDebugLevel::Informational: color = FColor(147, 231, 237); break;
-    case LogDebugLevel::Success: color = FColor(156, 237, 147); break;
-    case LogDebugLevel::Failure: color = FColor(237, 147, 168); break;
-    case LogDebugLevel::Unimportant: color = FColor(237, 228, 147); break;
+    case LogDebugLevel::Informational: 
+        color = FColor(147, 231, 237); 
+        UE_LOG(LogAirSim, Log, TEXT("%s%s"), *prefix, *suffix);
+        break;
+    case LogDebugLevel::Success: 
+        color = FColor(156, 237, 147); 
+        UE_LOG(LogAirSim, Log, TEXT("%s%s"), *prefix, *suffix);
+        break;
+    case LogDebugLevel::Failure: 
+        color = FColor(237, 147, 168);
+        UE_LOG(LogAirSim, Error, TEXT("%s%s"), *prefix, *suffix); 
+        break;
+    case LogDebugLevel::Unimportant: 
+        color = FColor(237, 228, 147);
+        UE_LOG(LogAirSim, Verbose, TEXT("%s%s"), *prefix, *suffix); 
+        break;
     default: color = FColor::Black; break;
     }
-    GEngine->AddOnScreenDebugMessage(key, persist_sec, color, prefix + suffix);
+    if (GEngine) {
+        GEngine->AddOnScreenDebugMessage(key, persist_sec, color, prefix + suffix);
+    }
     //GEngine->AddOnScreenDebugMessage(key + 10, 60.0f, color, FString::FromInt(key));
 }
 
@@ -330,6 +346,27 @@ std::string UAirBlueprintLib::GetMeshName(T* mesh)
     }
 }
 
+template<>
+std::string UAirBlueprintLib::GetMeshName<USkinnedMeshComponent>(USkinnedMeshComponent* mesh)
+{
+  switch(mesh_naming_method)
+  {
+    case msr::airlib::AirSimSettings::SegmentationSettings::MeshNamingMethodType::OwnerName:
+      if (mesh->GetOwner())
+        return std::string(TCHAR_TO_UTF8(*(mesh->GetOwner()->GetName())));
+      else
+        return ""; // std::string(TCHAR_TO_UTF8(*(UKismetSystemLibrary::GetDisplayName(mesh))));
+    case msr::airlib::AirSimSettings::SegmentationSettings::MeshNamingMethodType::StaticMeshName:
+      if (mesh->SkeletalMesh)
+        return std::string(TCHAR_TO_UTF8(*(mesh->SkeletalMesh->GetName())));
+      else
+        return "";
+    default:
+      return "";
+  }
+}
+
+
 std::string UAirBlueprintLib::GetMeshName(ALandscapeProxy* mesh)
 {
     return std::string(TCHAR_TO_UTF8(*(mesh->GetName())));
@@ -338,6 +375,10 @@ std::string UAirBlueprintLib::GetMeshName(ALandscapeProxy* mesh)
 void UAirBlueprintLib::InitializeMeshStencilIDs(bool ignore_existing)
 {
     for (TObjectIterator<UStaticMeshComponent> comp; comp; ++comp)
+    {
+        InitializeObjectStencilID(*comp, ignore_existing);
+    }
+    for (TObjectIterator<USkinnedMeshComponent> comp; comp; ++comp)
     {
         InitializeObjectStencilID(*comp, ignore_existing);
     }
@@ -375,6 +416,10 @@ bool UAirBlueprintLib::SetMeshStencilID(const std::string& mesh_name, int object
 
     int changes = 0;
     for (TObjectIterator<UStaticMeshComponent> comp; comp; ++comp)
+    {
+        SetObjectStencilIDIfMatch(*comp, object_id, mesh_name, is_name_regex, name_regex, changes);
+    }
+    for (TObjectIterator<USkinnedMeshComponent> comp; comp; ++comp)
     {
         SetObjectStencilIDIfMatch(*comp, object_id, mesh_name, is_name_regex, name_regex, changes);
     }
@@ -552,4 +597,17 @@ float UAirBlueprintLib::GetDisplayGamma()
 void UAirBlueprintLib::EnableInput(AActor* actor)
 {
     actor->EnableInput(actor->GetWorld()->GetFirstPlayerController());
+}
+
+UObject* UAirBlueprintLib::LoadObject(const std::string& name)
+{
+    FString str(name.c_str());
+    UObject *obj = StaticLoadObject(UObject::StaticClass(), nullptr, *str);
+    if (obj == nullptr) {
+        std::string msg = "Failed to load asset - " + name;
+        FString fmsg(msg.c_str());
+        LogMessage(TEXT("Load: "), fmsg, LogDebugLevel::Failure);
+        throw std::invalid_argument(msg);
+    }
+    return obj;
 }
